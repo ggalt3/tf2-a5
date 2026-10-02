@@ -121,6 +121,7 @@ public:
             std::shared_ptr<c_checkbox> edgebug_auto_strafe;
             std::shared_ptr<c_checkbox> edgebug_mouse_lock;
             std::shared_ptr<c_checkbox> edgebug_stack;
+            std::shared_ptr<c_checkbox> edgebug_silent;
         } movement;
         struct
         {

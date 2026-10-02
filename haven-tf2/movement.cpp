@@ -233,10 +233,12 @@ void c_movement::edgebug_post() {
         m_eb_stack_count = 1;
       m_eb_stack_window = old_tick_count + 96; // ~1.5s to land the next one
 
+      char msg[64];
       if (m_eb_stack_count > 1)
-        g_interfaces.m_cvar->console_printf("[haven] edgebug x%d\n", m_eb_stack_count);
+        snprintf(msg, sizeof(msg), "\x07" "61BA3B" "haven \x07" "FFFFFF" "| edgebug x%d", m_eb_stack_count);
       else
-        g_interfaces.m_cvar->console_printf("[haven] edgebug\n");
+        snprintf(msg, sizeof(msg), "\x07" "61BA3B" "haven \x07" "FFFFFF" "| edgebug");
+      g_cl.chat_print(msg);
       edgebug_reset();
     }
   }
@@ -244,11 +246,10 @@ void c_movement::edgebug_post() {
   // search.
   if (!m_eb_detected) {
     struct eb_mode_t {
-      int   type; // see eb_*
+      int   type; // eb_mode_type
       bool  duck;
       float yaw_offset; // steer: yaw offset from current velocity direction
     };
-    enum { eb_still, eb_user, eb_auto_strafe, eb_steer };
 
     const bool advanced     = ctrl.edgebug_advanced_search->m_value;
     const bool auto_strafe  = advanced && ctrl.edgebug_auto_strafe->m_value;
@@ -430,9 +431,25 @@ void c_movement::edgebug_post() {
       cmd->forwardmove_ = stored.forwardmove;
       cmd->sidemove_    = stored.sidemove;
 
-      // keep the player's real view angles, re-express the stored movement relative to them.
-      edgebug_correct_movement(cmd, stored.viewangles, backup_angles);
-      cmd->m_viewangles = backup_angles;
+      vector view = backup_angles;
+      if (!ctrl.edgebug_silent->m_value && m_eb_search_mode != eb_still) {
+        // guide the view towards where we're actually heading: the predicted angles for the
+        // mouse-continuation mode, the velocity direction for the strafing modes.
+        float target_yaw = stored.viewangles.m_y;
+        if (m_eb_search_mode != eb_user) {
+          const vector velocity = local->m_velocity();
+          if (velocity.length_2d() > 1.f)
+            target_yaw = velocity.angle_to().m_y;
+        }
+        const float diff = std::remainderf(target_yaw - view.m_y, 360.f);
+        view.m_y += std::clamp(diff * 0.25f, -8.f, 8.f);
+        clamp_angles(view);
+        view.m_x = backup_angles.m_x;
+      }
+
+      // re-express the stored movement relative to the angles we're actually sending.
+      edgebug_correct_movement(cmd, stored.viewangles, view);
+      cmd->m_viewangles = view;
     }
   }
 

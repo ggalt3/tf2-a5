@@ -1,6 +1,8 @@
 #pragma once
 class c_movement
 {
+    enum eb_mode_type { eb_still, eb_user, eb_auto_strafe, eb_steer };
+
     struct edgebug_cmd_t {
         vector viewangles;
         float  forwardmove;

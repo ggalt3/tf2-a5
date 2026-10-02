@@ -32,6 +32,20 @@ void c_client::unload() {
   g_utils.m_debug.close_console();
 }
 
+void c_client::chat_print(const char* msg) {
+  // CClientModeShared: IClientMode vptr (8) + CGameEventListener (16) + pad (24) -> m_pChatElement.
+  const auto chat = g_interfaces.m_client_mode
+                        ? *reinterpret_cast<void**>(reinterpret_cast<uintptr_t>(g_interfaces.m_client_mode) + 0x30)
+                        : nullptr;
+  if (!chat) {
+    g_interfaces.m_cvar->console_printf("%s\n", msg);
+    return;
+  }
+  // CBaseHudChat::ChatPrintf(int iPlayerIndex, int iFilter, const char* fmt, ...)
+  using chat_printf_fn = void (*)(void*, int, int, const char*, ...);
+  g_utils.get_virtual_function<chat_printf_fn>(chat, 19)(chat, 0, 0, "%s", msg);
+}
+
 void c_client::on_move(usercmd_t* cmd) {
   this->m_cmd   = cmd;
   this->m_local = g_interfaces.m_entity_list->get_entity<c_base_player>(

@@ -113,6 +113,8 @@ void c_ui::init() {
             "Mouse Lock", "Freeze mouse input while an edgebug is being executed");
         this->m_controls.movement.edgebug_stack = edgebug->add_checkbox(
             "Stack", "Air strafe towards further edgebugs to chain them together");
+        this->m_controls.movement.edgebug_silent = edgebug->add_checkbox(
+            "Silent", "Keep your view still and only correct movement, instead of turning the view into the edgebug");
       }
     }
     const auto misc = main_window->add_tab("Misc");

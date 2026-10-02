@@ -14,5 +14,7 @@ public:
   void init();
   void unload();
   void on_move(usercmd_t* cmd);
+  // prints to the in-game chat (supports \x07RRGGBB colour codes), falls back to the console.
+  void chat_print(const char* msg);
 };
 inline c_client g_cl;
