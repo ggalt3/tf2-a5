@@ -1,6 +1,7 @@
 #include "aimbot.h"
 #include "movement.h"
 #include "movement_simulate.h"
+#include "pixelsurf.h"
 #include "player_manager.h"
 #include "prediction.h"
 #include "projectile aim.h"
@@ -28,6 +29,7 @@ void paint(uintptr_t ecx, paint_mode_t mode) {
       g_input.poll();
       g_visuals.on_paint();
       g_proj.draw();
+      g_pixelsurf.draw();
       g_ui.on_paint();
     }
     g_interfaces.m_surface->finish_drawing();

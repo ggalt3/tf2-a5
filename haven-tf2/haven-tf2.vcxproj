@@ -214,6 +214,7 @@
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">Create</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Create</PrecompiledHeader>
     </ClCompile>
+    <ClCompile Include="pixelsurf.cpp" />
     <ClCompile Include="player_esp.cpp" />
     <ClCompile Include="player_manager.cpp" />
     <ClCompile Include="prediction.cpp" />
@@ -336,6 +337,7 @@
     <ClInclude Include="offsets.h" />
     <ClInclude Include="overlay_text_t.h" />
     <ClInclude Include="pch.h" />
+    <ClInclude Include="pixelsurf.h" />
     <ClInclude Include="player_manager.h" />
     <ClInclude Include="prediction.h" />
     <ClInclude Include="projectile aim.h" />

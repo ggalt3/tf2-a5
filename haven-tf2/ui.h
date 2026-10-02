@@ -125,6 +125,15 @@ public:
         } movement;
         struct
         {
+            std::shared_ptr<c_checkbox> enabled;
+            std::shared_ptr<c_key_bind> key;
+            std::shared_ptr<c_checkbox> auto_align;
+            std::shared_ptr<c_checkbox> calc;
+            std::shared_ptr<c_key_bind> calc_key;
+            std::shared_ptr<c_slider>   calc_range;
+        } pixelsurf;
+        struct
+        {
             std::shared_ptr<c_key_bind> third_person;
             std::shared_ptr<c_slider> third_person_horizontal_offset;
             std::shared_ptr<c_slider> third_person_vertical_offset;

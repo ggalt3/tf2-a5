@@ -3,6 +3,7 @@
 #include "stab.h"
 #include "movement_simulate.h"
 #include "movement.h"
+#include "pixelsurf.h"
 #include "aimbot.h"
 #include "player_manager.h"
 #include "prediction.h"
@@ -78,7 +79,9 @@ void c_client::on_move(usercmd_t* cmd) {
   cmd->m_viewangles.m_x = std::clamp<float>(cmd->m_viewangles.m_x, -89.9f, 89.9f);
   g_local_move.correct_movement(original_view);
 
-  // runs on the final command so the simulated inputs match what gets sent.
-  if (this->m_local)
+  // these run on the final command so the simulated inputs match what gets sent.
+  if (this->m_local) {
+    g_pixelsurf.run(cmd);
     g_local_move.edgebug_post();
+  }
 }
