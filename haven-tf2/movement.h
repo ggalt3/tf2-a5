@@ -17,6 +17,8 @@ class c_movement
     int           m_eb_lock_ticks      = 0;
     int           m_eb_current_tick    = 0;
     int           m_eb_search_mode     = 0;
+    int           m_eb_stack_count     = 0;
+    int           m_eb_stack_window    = 0;
     edgebug_cmd_t m_eb_cmds[64]        = {};
 
     bool edgebug_check(usercmd_t* cmd);

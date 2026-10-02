@@ -220,40 +220,87 @@ void c_movement::edgebug_post() {
   angle_delta *= 0.5f;
   last_angles = backup_angles;
 
+  const bool stack = ctrl.edgebug_stack->m_value;
+
+  // replay finished last frame -> bookkeeping, then fall through into a fresh search so a
+  // chained edgebug can be picked up on this very command.
+  if (m_eb_detected) {
+    m_eb_current_tick++;
+    if (m_eb_current_tick > m_eb_lock_ticks) {
+      if (stack && old_tick_count <= m_eb_stack_window)
+        m_eb_stack_count++;
+      else
+        m_eb_stack_count = 1;
+      m_eb_stack_window = old_tick_count + 96; // ~1.5s to land the next one
+
+      if (m_eb_stack_count > 1)
+        g_interfaces.m_cvar->console_printf("[haven] edgebug x%d\n", m_eb_stack_count);
+      else
+        g_interfaces.m_cvar->console_printf("[haven] edgebug\n");
+      edgebug_reset();
+    }
+  }
+
   // search.
   if (!m_eb_detected) {
-    // mode table:
-    //  0: still, no duck         1: still, duck
-    //  2: user move, no duck     3: user move, duck
-    //  4: auto strafe, no duck   5: auto strafe, duck
+    struct eb_mode_t {
+      int   type; // see eb_*
+      bool  duck;
+      float yaw_offset; // steer: yaw offset from current velocity direction
+    };
+    enum { eb_still, eb_user, eb_auto_strafe, eb_steer };
+
     const bool advanced     = ctrl.edgebug_advanced_search->m_value;
     const bool auto_strafe  = advanced && ctrl.edgebug_auto_strafe->m_value;
     const bool already_duck = backup_buttons & IN_DUCK;
 
-    static int last_success_mode = -1;
+    static eb_mode_t last_success      = {-1, false, 0.f};
+    static bool      has_last_success  = false;
 
-    const int first_mode = advanced ? 0 : 2, end_mode = advanced ? 6 : 4;
-    int       modes[6];
+    eb_mode_t modes[48];
     int       mode_count = 0;
+
     // try the mode that worked last time first.
-    const int preferred = (last_success_mode >= first_mode && last_success_mode < end_mode) ? last_success_mode : -1;
-    if (preferred >= 0)
-      modes[mode_count++] = preferred;
-    for (int m = first_mode; m < end_mode; m++)
-      if (m != preferred)
-        modes[mode_count++] = m;
-    last_success_mode = -1;
+    const bool queued_last = has_last_success && !(already_duck && !last_success.duck);
+    if (queued_last)
+      modes[mode_count++] = last_success;
 
-    for (int i = 0; i < mode_count && !m_eb_detected; i++) {
-      const int  mode  = modes[i];
-      const bool duck  = mode & 1;
-      const bool still = mode < 2;
-      const bool strafe = mode >= 4;
-
-      if (strafe && !auto_strafe)
-        continue;
+    const auto push = [&](int type, bool duck, float yaw_offset = 0.f) {
       if (already_duck && !duck)
-        continue;
+        return;
+      if (queued_last && last_success.type == type && last_success.duck == duck &&
+          last_success.yaw_offset == yaw_offset)
+        return; // already queued first
+      if (mode_count < 48)
+        modes[mode_count++] = {type, duck, yaw_offset};
+    };
+
+    push(eb_user, false);
+    push(eb_user, true);
+    if (advanced) {
+      push(eb_still, false);
+      push(eb_still, true);
+    }
+    if (auto_strafe) {
+      push(eb_auto_strafe, false);
+      push(eb_auto_strafe, true);
+    }
+    if (stack) {
+      // steer left/right of the current flight path by increasing amounts.
+      for (float offset : {15.f, 30.f, 50.f, 75.f, 100.f})
+        for (float sign : {1.f, -1.f})
+          for (bool duck : {true, false})
+            push(eb_steer, duck, sign * offset);
+    }
+    has_last_success = false;
+
+    // cap the amount of work per frame, stacking can queue a lot of modes.
+    const int max_predictions   = stack ? 768 : 384;
+    int       total_predictions = 0;
+
+    for (int i = 0; i < mode_count && !m_eb_detected && total_predictions < max_predictions; i++) {
+      const auto mode = modes[i];
+      const bool duck = mode.duck;
 
       g_prediction.restore_to_predicted();
 
@@ -265,7 +312,13 @@ void c_movement::edgebug_post() {
       vector current_angle = backup_angles;
       m_eb_velocity_backup = local->m_velocity();
 
-      for (int tick = 0; tick < 64; tick++) {
+      // steer target is fixed at search start so the mode describes "turn by X then hold".
+      const vector start_velocity = local->m_velocity();
+      const float  start_yaw = start_velocity.length_2d() > 1.f ? start_velocity.angle_to().m_y : backup_angles.m_y;
+      const float  steer_target_yaw = std::remainderf(start_yaw + mode.yaw_offset, 360.f);
+
+      const int horizon = mode.type == eb_steer ? 48 : 64;
+      for (int tick = 0; tick < horizon && total_predictions < max_predictions; tick++) {
         if (local->flags() & FL_ONGROUND || local->m_velocity().m_z > 0.f)
           break;
 
@@ -274,21 +327,42 @@ void c_movement::edgebug_post() {
         else
           cmd->buttons_ &= ~IN_DUCK;
 
-        if (still) {
-          cmd->forwardmove_ = 0.f;
-          cmd->sidemove_    = 0.f;
-          cmd->m_viewangles = backup_angles;
-        } else if (!strafe) {
-          cmd->forwardmove_ = backup_forward;
-          cmd->sidemove_    = backup_side;
-          if (fabsf(std::remainderf(current_angle.m_y - backup_angles.m_y, 360.f)) < 179.f) {
-            current_angle = current_angle + angle_delta;
-            clamp_angles(current_angle);
+        switch (mode.type) {
+          case eb_still:
+            cmd->forwardmove_ = 0.f;
+            cmd->sidemove_    = 0.f;
+            cmd->m_viewangles = backup_angles;
+            break;
+          case eb_user:
+            cmd->forwardmove_ = backup_forward;
+            cmd->sidemove_    = backup_side;
+            if (fabsf(std::remainderf(current_angle.m_y - backup_angles.m_y, 360.f)) < 179.f) {
+              current_angle = current_angle + angle_delta;
+              clamp_angles(current_angle);
+            }
+            cmd->m_viewangles = current_angle;
+            break;
+          case eb_auto_strafe:
+            cmd->m_viewangles = backup_angles;
+            edgebug_auto_strafe(cmd);
+            break;
+          case eb_steer: {
+            // air strafe (wishdir perpendicular to velocity) towards the target yaw, then coast.
+            cmd->m_viewangles     = backup_angles;
+            const vector velocity = local->m_velocity();
+            const float  vel_yaw  = velocity.length_2d() > 1.f ? velocity.angle_to().m_y : backup_angles.m_y;
+            const float  diff     = std::remainderf(steer_target_yaw - vel_yaw, 360.f);
+            if (fabsf(diff) < 2.f) {
+              cmd->forwardmove_ = 0.f;
+              cmd->sidemove_    = 0.f;
+            } else {
+              const float wish_yaw = vel_yaw + std::copysign(90.f, diff);
+              const float rot      = deg_to_rad(wish_yaw - backup_angles.m_y);
+              cmd->forwardmove_    = cosf(rot) * 450.f;
+              cmd->sidemove_       = -sinf(rot) * 450.f;
+            }
+            break;
           }
-          cmd->m_viewangles = current_angle;
-        } else {
-          cmd->m_viewangles = backup_angles;
-          edgebug_auto_strafe(cmd);
         }
 
         // store command for this tick.
@@ -301,6 +375,7 @@ void c_movement::edgebug_post() {
 
         const vector pre_velocity = local->m_velocity();
         g_prediction.simulate(cmd);
+        total_predictions++;
         const vector post_velocity = local->m_velocity();
 
         // check 1: velocity increased while falling (edge scrape) with a horizontal push.
@@ -316,12 +391,13 @@ void c_movement::edgebug_post() {
         const bool gravity_reset = edgebug_check(cmd);
 
         if ((velocity_increased && horizontal_increase) || gravity_reset) {
-          m_eb_detected             = true;
-          m_eb_lock_ticks           = tick + 1; // number of stored cmds to replay (0..tick)
-          m_eb_current_tick         = 0;
-          m_eb_search_mode          = mode;
-          m_eb_duck                 = duck;
-          last_success_mode         = mode;
+          m_eb_detected     = true;
+          m_eb_lock_ticks   = tick + 1; // number of stored cmds to replay (0..tick)
+          m_eb_current_tick = 1;        // replaying cmd 0 on this command
+          m_eb_search_mode  = mode.type;
+          m_eb_duck         = duck;
+          last_success      = mode;
+          has_last_success  = true;
           break;
         }
 
@@ -338,15 +414,6 @@ void c_movement::edgebug_post() {
   // execute.
   if (m_eb_detected) {
     g_prediction.restore_to_predicted();
-
-    m_eb_current_tick++;
-
-    if (m_eb_current_tick > m_eb_lock_ticks) {
-      g_interfaces.m_cvar->console_printf("[haven] edgebug\n");
-      edgebug_reset();
-      restore_globals();
-      return;
-    }
 
     const int idx = m_eb_current_tick - 1;
     if (idx >= 0 && idx < 64) {
