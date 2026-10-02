@@ -158,13 +158,15 @@ void c_pixelsurf::pixel_surf(usercmd_t* cmd, const vector& velocity, int tick_co
   }
 }
 
-// on the ground near a saved point: find the tick where jumping (plain or with an air crouch)
-// lands us on the pixel, and jump then. drops need no input, the airborne logic handles them.
+// on the ground near a saved point: check whether jumping (plain or with an air crouch) lands
+// us on the pixel, and jump when it does. drops need no input, the airborne logic handles them.
 void c_pixelsurf::auto_jump(usercmd_t* cmd, int tick_count) {
   const auto& ctrl  = g_ui.m_controls.pixelsurf;
   const auto  local = g_cl.m_local;
-  if (!ctrl.auto_jump->m_value || !on_ground())
+  if (!ctrl.auto_jump->m_value || !on_ground()) {
+    m_pending_variant = -1;
     return;
+  }
   if (tick_count < m_auto_jump_cooldown)
     return;
 
@@ -180,23 +182,36 @@ void c_pixelsurf::auto_jump(usercmd_t* cmd, int tick_count) {
     if (d < best)
       best = d, target = &p;
   }
-  if (!target)
+  if (!target) {
+    m_pending_variant = -1;
     return;
+  }
+
+  // push toward the point's wall like the source does.
+  const vector into_wall(-target->normal.m_x, -target->normal.m_y, 0.f);
+  const float  rot = deg_to_rad(into_wall.angle_to().m_y - cmd->m_viewangles.m_y);
+  const float  push_forward = cosf(rot) * 450.f, push_side = -sinf(rot) * 450.f;
+
+  // last tick we released a held jump so this press registers as a fresh edge.
+  if (m_pending_variant >= 0) {
+    cmd->buttons_ |= IN_JUMP;
+    cmd->buttons_ &= ~IN_DUCK;
+    cmd->forwardmove_ = push_forward;
+    cmd->sidemove_    = push_side;
+    m_auto_duck_until    = m_pending_variant == 1 ? tick_count + 48 : 0;
+    m_auto_jump_cooldown = tick_count + 10;
+    m_pending_variant    = -1;
+    return;
+  }
 
   const int   backup_buttons = cmd->buttons_;
   const float backup_forward = cmd->forwardmove_, backup_side = cmd->sidemove_;
 
-  // push into the point's wall like the source does, the player still steers.
-  const vector into_wall(-target->normal.m_x, -target->normal.m_y, 0.f);
-  const float  rot = deg_to_rad(into_wall.angle_to().m_y - cmd->m_viewangles.m_y);
-  const float  push_forward = cosf(rot) * 45.f, push_side = -sinf(rot) * 45.f;
-  const bool   user_moving  = fabsf(backup_forward) > 1.f || fabsf(backup_side) > 1.f;
-
-  int chosen = -1; // 0 = jump, 1 = jump + crouch
+  int chosen = -1; // 0 = jump, 1 = jump + air crouch
   for (int variant = 0; variant < 2 && chosen < 0; variant++) {
     g_prediction.restore_to_predicted();
-    cmd->forwardmove_ = user_moving ? backup_forward : push_forward;
-    cmd->sidemove_    = user_moving ? backup_side : push_side;
+    cmd->forwardmove_ = push_forward;
+    cmd->sidemove_    = push_side;
 
     // jump needs a release tick to register if the player is holding it.
     cmd->buttons_ = backup_buttons & ~(IN_JUMP | IN_DUCK);
@@ -229,17 +244,16 @@ void c_pixelsurf::auto_jump(usercmd_t* cmd, int tick_count) {
   if (chosen < 0)
     return;
 
-  // jump now. the engine ignores a held jump, so release it this tick if it's down and go next tick.
+  // a held jump is ignored by the engine: release it this tick, press it next tick.
   if (backup_buttons & IN_JUMP) {
     cmd->buttons_ &= ~IN_JUMP;
+    m_pending_variant = chosen;
     return;
   }
   cmd->buttons_ |= IN_JUMP;
   cmd->buttons_ &= ~IN_DUCK;
-  if (!user_moving) {
-    cmd->forwardmove_ = push_forward;
-    cmd->sidemove_    = push_side;
-  }
+  cmd->forwardmove_ = push_forward;
+  cmd->sidemove_    = push_side;
   m_auto_duck_until    = chosen == 1 ? tick_count + 48 : 0;
   m_auto_jump_cooldown = tick_count + 10;
 }
@@ -447,6 +461,19 @@ void c_pixelsurf::load_points() {
   } catch (std::exception& e) {
     printf_s(__FUNCTION__ " %s\n", e.what());
   }
+}
+
+void c_pixelsurf::clear_map_points() {
+  if (!m_points_loaded)
+    load_points();
+  const std::string map     = current_map();
+  const auto        removed = static_cast<int>(
+      std::erase_if(m_saved, [&](const calc_point_t& p) { return p.map == map; }));
+  save_points();
+  char msg[96];
+  snprintf(msg, sizeof(msg), "\x07" "61BA3B" "haven \x07" "FFFFFF" "| pixel surf: removed %d point%s on %s",
+           removed, removed == 1 ? "" : "s", map.c_str());
+  g_cl.chat_print(msg);
 }
 
 void c_pixelsurf::save_points() const {

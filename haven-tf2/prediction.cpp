@@ -44,6 +44,7 @@ void prediction::restore_to_predicted() {
     return;
   restore_entity_to_predicted_frame(g_interfaces.m_prediction,
                                     g_interfaces.m_prediction->m_nCommandsPredicted - 1);
+  m_prev_buttons = 0;
 }
 
 void prediction::simulate(usercmd_t* cmd) {
@@ -66,8 +67,13 @@ void prediction::simulate(usercmd_t* cmd) {
   memset(&m_MoveData, 0, sizeof(m_MoveData));
   g_interfaces.m_prediction->SetupMove(g_cl.m_local, cmd, g_interfaces.m_move_helper,
                                        &m_MoveData);
+  // SetupMove fills old buttons from state update_buttons already synced to this cmd, so a
+  // freshly pressed button would look held forever (CheckJumpButton would never fire). Feed it
+  // the previous sim tick's buttons instead, like the source ports do.
+  m_MoveData.m_nOldButtons = m_prev_buttons;
   g_interfaces.m_game_movement->ProcessMovement(g_cl.m_local, &m_MoveData);
   g_interfaces.m_prediction->FinishMove(g_cl.m_local, cmd, &m_MoveData);
+  m_prev_buttons = cmd->buttons_;
 
   g_interfaces.m_move_helper->SetHost(nullptr);
   g_cl.m_local->SetCurrentCmd(nullptr);

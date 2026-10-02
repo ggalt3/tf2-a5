@@ -4,6 +4,8 @@ class prediction
     float m_fOldCurrentTime, m_fOldFrameTime;
     int m_nOldTickCount;
     CMoveData m_MoveData = {};
+    // buttons the previous simulate() ran with, so the engine sees real button edges.
+    int m_prev_buttons = 0;
 
 public:
     int get_tickbase(usercmd_t* pCmd, c_base_player* pLocal);

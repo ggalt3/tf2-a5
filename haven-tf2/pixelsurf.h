@@ -27,6 +27,7 @@ class c_pixelsurf
     // auto jump
     int m_auto_duck_until    = 0;
     int m_auto_jump_cooldown = 0;
+    int m_pending_variant    = -1; // verified jump variant waiting for a release-then-press edge
 
     // finder: hold the key and drag a vertical line along a wall
     bool   m_finder_held   = false;
@@ -73,4 +74,7 @@ public:
     void draw();
 
     bool in_pixel_surf() const { return m_in_surf; }
+
+    // deletes every saved point on the current map and rewrites the points file.
+    void clear_map_points();
 } inline g_pixelsurf;

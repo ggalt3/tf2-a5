@@ -1,4 +1,5 @@
 #include "sdk.h"
+#include "pixelsurf.h"
 
 void save_callback() {
   g_config.save(
@@ -11,6 +12,8 @@ void load_callback() {
       std::format("config_{}.intern", g_ui.m_controls.config.config_slot->m_selected_index + 1)
           .c_str());
 }
+
+void clear_points_callback() { g_pixelsurf.clear_map_points(); }
 
 void key_bind_t::update() {
   type = std::clamp(type, 0, static_cast<int>(this->key_bind_types_.size()));
@@ -121,6 +124,8 @@ void c_ui::init() {
         this->m_controls.pixelsurf.calc_range = pixelsurf->add_slider(
             "Click Range", 16, 96, "Units above and below the aimed point to search when the key is just clicked");
         this->m_controls.pixelsurf.calc_range->m_value = 48.f;
+        this->m_controls.pixelsurf.clear_points = pixelsurf->add_button(
+            "Clear Map Points", clear_points_callback, "Delete every saved pixel surf point on the current map");
       }
       const auto edgebug = movement->add_groupbox("Edgebug", {239, 5, 234, 322});
       {

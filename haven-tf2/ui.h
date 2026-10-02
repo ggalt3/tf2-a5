@@ -134,6 +134,7 @@ public:
             std::shared_ptr<c_key_bind> calc_key;
             std::shared_ptr<c_key_bind> save_key;
             std::shared_ptr<c_slider>   calc_range;
+            std::shared_ptr<c_button>   clear_points;
         } pixelsurf;
         struct
         {
