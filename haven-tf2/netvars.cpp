@@ -82,7 +82,9 @@ void c_netvars::get_offsets() {
       this->get("DT_BaseEntity", "m_hOwnerEntity").m_offset;
   this->m_offsets.dt_base_entity.m_simulation_time =
       this->get("DT_BaseEntity", "m_flSimulationTime").m_offset;
-  this->m_offsets.dt_base_entity.m_move_type = this->get("DT_BaseEntity", "movetype").m_offset;
+  // "movetype" is a proxy-only prop (offset 0), the real byte sits 4 before m_nWaterLevel.
+  this->m_offsets.dt_base_entity.m_move_type =
+      this->get("DT_TFPlayer", "m_nWaterLevel").m_offset - 4;
   this->m_offsets.dt_base_entity.m_ang_rot =
       this->get("DT_BaseEntity", "m_angRotation").m_offset;
 

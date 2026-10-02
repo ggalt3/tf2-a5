@@ -359,7 +359,8 @@ char& c_base_player::m_life_state() {
 }
 
 move_type_t c_base_player::move_type() {
-  return this->get<move_type_t>(g_netvars.m_offsets.dt_base_entity.m_move_type);
+  return static_cast<move_type_t>(
+      this->get<unsigned char>(g_netvars.m_offsets.dt_base_entity.m_move_type));
 }
 
 bool c_base_player::is_alive() { return this->m_life_state() == e_life_state::life_alive; }

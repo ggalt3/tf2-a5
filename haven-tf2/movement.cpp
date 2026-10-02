@@ -54,9 +54,13 @@ bool c_movement::edgebug_check(usercmd_t* cmd) {
 
   const vector velocity = local->m_velocity();
 
-  // check 1: was falling fast and velocity reset to the first-tick gravity value.
+  // a normal landing leaves us on the ground, an edgebug doesn't.
+  if (local->flags() & FL_ONGROUND)
+    return false;
+
+  // check 1: was falling and velocity reset to the first-tick gravity value.
   if (m_eb_velocity_backup.m_z < -gravity_vel &&
-      roundf(velocity.m_z) == -roundf(gravity_vel))
+      (roundf(velocity.m_z) == -roundf(gravity_vel) || fabsf(velocity.m_z + gravity_vel) < 2.8f))
     return true;
 
   // check 2: was falling and velocity increased but still negative (edge scrape),
