@@ -114,8 +114,10 @@ void c_pixelsurf::pixel_surf(usercmd_t* cmd, const vector& velocity, int tick_co
     m_should_surf = false;
     return;
   }
-  if (!m_wall_detected)
-    return;
+
+  // auto jump asked for a crouch variant: hold duck until the surf logic takes over.
+  if (tick_count < m_auto_duck_until)
+    cmd->buttons_ |= IN_DUCK;
 
   if (!m_should_surf) {
     const int backup_buttons = cmd->buttons_;
@@ -134,8 +136,9 @@ void c_pixelsurf::pixel_surf(usercmd_t* cmd, const vector& velocity, int tick_co
         if (!is_surf_velocity(g_cl.m_local->m_velocity().m_z))
           continue;
         if (i == 0) {
-          // standing already surfs, nothing to do.
-          cmd->buttons_ = backup_buttons;
+          // standing already surfs, nothing to do (and stop any auto duck hold).
+          cmd->buttons_     = backup_buttons & ~IN_DUCK;
+          m_auto_duck_until = 0;
           g_prediction.restore_to_predicted();
           return;
         }
@@ -153,6 +156,92 @@ void c_pixelsurf::pixel_surf(usercmd_t* cmd, const vector& velocity, int tick_co
     if (tick_count > m_surf_ticks && !is_surf_velocity(velocity.m_z))
       m_should_surf = false;
   }
+}
+
+// on the ground near a saved point: find the tick where jumping (plain or with an air crouch)
+// lands us on the pixel, and jump then. drops need no input, the airborne logic handles them.
+void c_pixelsurf::auto_jump(usercmd_t* cmd, int tick_count) {
+  const auto& ctrl  = g_ui.m_controls.pixelsurf;
+  const auto  local = g_cl.m_local;
+  if (!ctrl.auto_jump->m_value || !on_ground())
+    return;
+  if (tick_count < m_auto_jump_cooldown)
+    return;
+
+  // nearest saved point on this map within the assist radius.
+  const std::string map    = current_map();
+  const vector      origin = local->m_vec_origin();
+  const calc_point_t* target = nullptr;
+  float best = ctrl.assist_radius->m_value;
+  for (const auto& p : m_saved) {
+    if (p.map != map)
+      continue;
+    const float d = (p.pos - origin).length_2d();
+    if (d < best)
+      best = d, target = &p;
+  }
+  if (!target)
+    return;
+
+  const int   backup_buttons = cmd->buttons_;
+  const float backup_forward = cmd->forwardmove_, backup_side = cmd->sidemove_;
+
+  // push into the point's wall like the source does, the player still steers.
+  const vector into_wall(-target->normal.m_x, -target->normal.m_y, 0.f);
+  const float  rot = deg_to_rad(into_wall.angle_to().m_y - cmd->m_viewangles.m_y);
+  const float  push_forward = cosf(rot) * 45.f, push_side = -sinf(rot) * 45.f;
+  const bool   user_moving  = fabsf(backup_forward) > 1.f || fabsf(backup_side) > 1.f;
+
+  int chosen = -1; // 0 = jump, 1 = jump + crouch
+  for (int variant = 0; variant < 2 && chosen < 0; variant++) {
+    g_prediction.restore_to_predicted();
+    cmd->forwardmove_ = user_moving ? backup_forward : push_forward;
+    cmd->sidemove_    = user_moving ? backup_side : push_side;
+
+    // jump needs a release tick to register if the player is holding it.
+    cmd->buttons_ = backup_buttons & ~(IN_JUMP | IN_DUCK);
+    if (backup_buttons & IN_JUMP)
+      g_prediction.simulate(cmd);
+    cmd->buttons_ |= IN_JUMP;
+    g_prediction.simulate(cmd);
+    cmd->buttons_ &= ~IN_JUMP;
+    if (variant == 1)
+      cmd->buttons_ |= IN_DUCK;
+
+    for (int t = 0; t < 96; t++) {
+      g_prediction.simulate(cmd);
+      if (on_ground())
+        break;
+      const vector pos = local->m_vec_origin();
+      if (is_surf_velocity(local->m_velocity().m_z) && fabsf(pos.m_z - target->pos.m_z) < 2.5f &&
+          (pos - target->pos).length_2d() < 40.f) {
+        chosen = variant;
+        break;
+      }
+    }
+  }
+
+  cmd->buttons_     = backup_buttons;
+  cmd->forwardmove_ = backup_forward;
+  cmd->sidemove_    = backup_side;
+  g_prediction.restore_to_predicted();
+
+  if (chosen < 0)
+    return;
+
+  // jump now. the engine ignores a held jump, so release it this tick if it's down and go next tick.
+  if (backup_buttons & IN_JUMP) {
+    cmd->buttons_ &= ~IN_JUMP;
+    return;
+  }
+  cmd->buttons_ |= IN_JUMP;
+  cmd->buttons_ &= ~IN_DUCK;
+  if (!user_moving) {
+    cmd->forwardmove_ = push_forward;
+    cmd->sidemove_    = push_side;
+  }
+  m_auto_duck_until    = chosen == 1 ? tick_count + 48 : 0;
+  m_auto_jump_cooldown = tick_count + 10;
 }
 
 // ---------------------------------------------------------------------------
@@ -483,10 +572,16 @@ void c_pixelsurf::run(usercmd_t* cmd) {
 
   if (surf_on) {
     m_in_surf = !on_ground() && is_surf_velocity(velocity.m_z);
+    if (!m_points_loaded)
+      load_points();
+    update_arcs(cmd, tick_count);
+    auto_jump(cmd, tick_count);
     auto_align(cmd);
     pixel_surf(cmd, velocity, tick_count);
-  } else
+  } else {
     m_should_surf = m_wall_detected = false;
+    m_auto_duck_until = 0;
+  }
 
   if (ctrl.calc->m_value) {
     finder(cmd);

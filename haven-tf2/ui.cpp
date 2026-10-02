@@ -107,6 +107,11 @@ void c_ui::init() {
             pixelsurf->add_keybind("Key", "Pixel surf activation key", key_bind_type_always);
         this->m_controls.pixelsurf.auto_align = pixelsurf->add_checkbox(
             "Auto Align", "Pushes you into the nearest wall with the push that keeps the surf");
+        this->m_controls.pixelsurf.auto_jump = pixelsurf->add_checkbox(
+            "Auto Jump", "Near a saved point, jumps (plain or with an air crouch) on the tick that lands on it");
+        this->m_controls.pixelsurf.assist_radius = pixelsurf->add_slider(
+            "Assist Radius", 50, 600, "How close to a saved point auto jump looks for a jump");
+        this->m_controls.pixelsurf.assist_radius->m_value = 300.f;
         this->m_controls.pixelsurf.calc = pixelsurf->add_checkbox(
             "Calculator", "Hold the calc key and drag a line up/down a wall to find pixel surf heights on it");
         this->m_controls.pixelsurf.calc_key =

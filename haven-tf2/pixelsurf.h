@@ -24,6 +24,10 @@ class c_pixelsurf
     int  m_surf_ticks  = 0;
     bool m_in_surf     = false;
 
+    // auto jump
+    int m_auto_duck_until    = 0;
+    int m_auto_jump_cooldown = 0;
+
     // finder: hold the key and drag a vertical line along a wall
     bool   m_finder_held   = false;
     bool   m_finder_valid  = false;
@@ -50,6 +54,7 @@ class c_pixelsurf
 
     void auto_align(usercmd_t* cmd);
     void pixel_surf(usercmd_t* cmd, const vector& velocity, int tick_count);
+    void auto_jump(usercmd_t* cmd, int tick_count);
 
     void finder(usercmd_t* cmd);
     void finder_solve(usercmd_t* cmd, float min_z, float max_z);

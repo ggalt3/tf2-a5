@@ -128,6 +128,8 @@ public:
             std::shared_ptr<c_checkbox> enabled;
             std::shared_ptr<c_key_bind> key;
             std::shared_ptr<c_checkbox> auto_align;
+            std::shared_ptr<c_checkbox> auto_jump;
+            std::shared_ptr<c_slider>   assist_radius;
             std::shared_ptr<c_checkbox> calc;
             std::shared_ptr<c_key_bind> calc_key;
             std::shared_ptr<c_key_bind> save_key;
