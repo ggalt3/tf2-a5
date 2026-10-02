@@ -130,6 +130,7 @@ public:
             std::shared_ptr<c_checkbox> auto_align;
             std::shared_ptr<c_checkbox> calc;
             std::shared_ptr<c_key_bind> calc_key;
+            std::shared_ptr<c_key_bind> save_key;
             std::shared_ptr<c_slider>   calc_range;
         } pixelsurf;
         struct

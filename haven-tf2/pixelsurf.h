@@ -3,8 +3,15 @@
 class c_pixelsurf
 {
     struct calc_point_t {
-        vector pos;
-        bool   duck;
+        vector      pos;    // on the wall surface, feet height
+        vector      normal; // wall normal
+        bool        duck;   // needs duck to hold the surf
+        std::string map;    // empty for unsaved finder results
+    };
+
+    struct jump_arc_t {
+        const char*        name;
+        std::vector<float> rel_z; // feet height per tick relative to the ground we start on
     };
 
     // auto align
@@ -17,20 +24,42 @@ class c_pixelsurf
     int  m_surf_ticks  = 0;
     bool m_in_surf     = false;
 
-    // calculator
-    bool                      m_calc_valid      = false;
-    bool                      m_calc_key_down   = false;
-    vector                    m_calc_point      = {};
-    vector                    m_calc_normal     = {};
-    std::vector<calc_point_t> m_calc_results    = {};
+    // finder: hold the key and drag a vertical line along a wall
+    bool   m_finder_held   = false;
+    bool   m_finder_valid  = false;
+    vector m_finder_start  = {};
+    vector m_finder_end    = {};
+    vector m_finder_normal = {};
+    std::vector<calc_point_t> m_found = {};
+
+    // saved points (all maps), persisted to disk
+    bool                      m_points_loaded = false;
+    bool                      m_save_key_down = false;
+    std::vector<calc_point_t> m_saved         = {};
+
+    // jump arcs from the ground we're standing on, used to label points with how to reach them
+    std::vector<jump_arc_t> m_arcs          = {};
+    float                   m_arc_ground_z  = FLT_MAX;
+    int                     m_arc_next_tick = 0;
 
     float surf_velocity() const;
     bool  is_surf_velocity(float z) const;
+    bool  trace_view(usercmd_t* cmd, trace_t& trace) const;
+    std::string current_map() const;
 
     void auto_align(usercmd_t* cmd);
     void pixel_surf(usercmd_t* cmd, const vector& velocity, int tick_count);
-    void calculator(usercmd_t* cmd);
-    void calculator_solve(usercmd_t* cmd);
+
+    void finder(usercmd_t* cmd);
+    void finder_solve(usercmd_t* cmd, float min_z, float max_z);
+    bool test_height(usercmd_t* cmd, const vector& wall, const vector& normal, float z, bool duck);
+
+    void save_key(usercmd_t* cmd);
+    void load_points();
+    void save_points() const;
+
+    void update_arcs(usercmd_t* cmd, int tick_count);
+    std::string reach_label(const calc_point_t& point) const;
 
 public:
     // call after prediction, on the final command.

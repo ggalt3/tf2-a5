@@ -108,11 +108,13 @@ void c_ui::init() {
         this->m_controls.pixelsurf.auto_align = pixelsurf->add_checkbox(
             "Auto Align", "Pushes you into the nearest wall with the push that keeps the surf");
         this->m_controls.pixelsurf.calc = pixelsurf->add_checkbox(
-            "Calculator", "Aim at a wall and press the calc key to mark pixel surf heights on it");
+            "Calculator", "Hold the calc key and drag a line up/down a wall to find pixel surf heights on it");
         this->m_controls.pixelsurf.calc_key =
-            pixelsurf->add_keybind("Calc Key", "Set the calculator point", key_bind_type_hold);
+            pixelsurf->add_keybind("Calc Key", "Hold and drag along a wall, release to search", key_bind_type_hold);
+        this->m_controls.pixelsurf.save_key = pixelsurf->add_keybind(
+            "Save Point Key", "Aim at a found point to save it for this map, or at a saved point to remove it", key_bind_type_hold);
         this->m_controls.pixelsurf.calc_range = pixelsurf->add_slider(
-            "Calc Range", 16, 96, "Units above and below the aimed point to search");
+            "Click Range", 16, 96, "Units above and below the aimed point to search when the key is just clicked");
         this->m_controls.pixelsurf.calc_range->m_value = 48.f;
       }
       const auto edgebug = movement->add_groupbox("Edgebug", {239, 5, 234, 322});

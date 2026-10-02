@@ -155,99 +155,129 @@ void c_pixelsurf::pixel_surf(usercmd_t* cmd, const vector& velocity, int tick_co
   }
 }
 
-// aim at a wall and press the key: finds the heights on that wall you can pixel surf at.
-void c_pixelsurf::calculator(usercmd_t* cmd) {
-  const auto& ctrl = g_ui.m_controls.pixelsurf;
-  if (!ctrl.calc->m_value) {
-    m_calc_valid = false;
-    m_calc_results.clear();
-    return;
-  }
+// ---------------------------------------------------------------------------
+// calculator / finder
+// ---------------------------------------------------------------------------
 
-  const bool down    = ctrl.calc_key->value_->enabled;
-  const bool pressed = down && !m_calc_key_down;
-  m_calc_key_down    = down;
-  if (!pressed)
-    return;
+static constexpr const char* k_points_file = "haven_pixelsurf_points.json";
+static constexpr float       k_air_duck_shift = 20.f; // origin rises by stand - duck hull height when ducking in air
 
+bool c_pixelsurf::trace_view(usercmd_t* cmd, trace_t& trace) const {
   const auto   local = g_cl.m_local;
   const vector eye   = local->m_vec_origin() + local->m_view_offset();
   vector       angles(cmd->m_viewangles.m_x, cmd->m_viewangles.m_y, 0.f);
-  const vector end = eye + angles.angle_vector() * 4096.f;
-
-  ray_t ray;
-  ray.initialize(eye, end);
+  ray_t        ray;
+  ray.initialize(eye, eye + angles.angle_vector() * 4096.f);
   trace_world_only filter;
-  trace_t          trace;
   g_interfaces.m_engine_trace->trace_ray(ray, MASK_PLAYERSOLID, &filter, &trace);
+  return trace.m_fraction < 1.f;
+}
 
-  if (trace.m_fraction >= 1.f || fabsf(trace.m_plane.normal.m_z) > 0.3f) {
-    m_calc_valid = false;
-    m_calc_results.clear();
+std::string c_pixelsurf::current_map() const {
+  std::string name = g_interfaces.m_engine->get_level_name() ? g_interfaces.m_engine->get_level_name() : "";
+  if (const auto slash = name.find_last_of("/\\"); slash != std::string::npos)
+    name = name.substr(slash + 1);
+  if (const auto dot = name.rfind(".bsp"); dot != std::string::npos)
+    name = name.substr(0, dot);
+  return name;
+}
+
+// hold the key: first press picks the wall, dragging extends a vertical line along it.
+// release: every integer height on that line is tested.
+void c_pixelsurf::finder(usercmd_t* cmd) {
+  const auto& ctrl = g_ui.m_controls.pixelsurf;
+  const bool  held = ctrl.calc_key->value_->enabled;
+
+  if (held) {
+    trace_t trace;
+    const bool hit = trace_view(cmd, trace);
+    if (!m_finder_held) {
+      // first press: pick the wall.
+      m_finder_valid = hit && fabsf(trace.m_plane.normal.m_z) < 0.3f;
+      if (m_finder_valid) {
+        m_finder_start = m_finder_end = trace.m_end;
+        m_finder_normal = trace.m_plane.normal;
+        m_found.clear();
+      }
+    } else if (m_finder_valid && hit) {
+      // keep the line vertical on the wall we picked, only follow the aim height.
+      m_finder_end = {m_finder_start.m_x, m_finder_start.m_y, trace.m_end.m_z};
+    }
+    m_finder_held = true;
+    return;
+  }
+
+  if (!m_finder_held)
+    return;
+  m_finder_held = false;
+  if (!m_finder_valid) {
     g_cl.chat_print("\x07" "61BA3B" "haven \x07" "FFFFFF" "| pixel surf calc: aim at a wall");
     return;
   }
 
-  m_calc_point  = trace.m_end;
-  m_calc_normal = trace.m_plane.normal;
-  m_calc_valid  = true;
-  calculator_solve(cmd);
+  float min_z = fminf(m_finder_start.m_z, m_finder_end.m_z);
+  float max_z = fmaxf(m_finder_start.m_z, m_finder_end.m_z);
+  if (max_z - min_z < 1.f) {
+    // a click instead of a drag: search around the point.
+    min_z -= ctrl.calc_range->m_value;
+    max_z += ctrl.calc_range->m_value;
+  }
+  finder_solve(cmd, min_z, max_z);
 
   char msg[96];
   snprintf(msg, sizeof(msg), "\x07" "61BA3B" "haven \x07" "FFFFFF" "| pixel surf calc: %d spot%s found",
-           static_cast<int>(m_calc_results.size()), m_calc_results.size() == 1 ? "" : "s");
+           static_cast<int>(m_found.size()), m_found.size() == 1 ? "" : "s");
   g_cl.chat_print(msg);
 }
 
-void c_pixelsurf::calculator_solve(usercmd_t* cmd) {
-  const auto& ctrl  = g_ui.m_controls.pixelsurf;
+// drops a copy of us just above the candidate height pressed into the wall and asks the engine.
+bool c_pixelsurf::test_height(usercmd_t* cmd, const vector& wall, const vector& n, float z, bool duck) {
   const auto  local = g_cl.m_local;
-  m_calc_results.clear();
+  const float align = local->maxs().m_x - 0.02197f;
+  const auto  velocity_offset = g_netvars.m_offsets.dt_base_player.m_velocity;
+  const auto  ground_offset   = g_netvars.m_offsets.dt_base_player.m_ground_handle;
 
-  const int   range   = static_cast<int>(ctrl.calc_range->m_value);
-  const float align   = local->maxs().m_x - 0.02197f; // hull pressed against the wall
-  const float base_z  = floorf(m_calc_point.m_z);
-  const vector& n     = m_calc_normal;
-  const vector  into_wall(-n.m_x, -n.m_y, 0.f);
-  const float   rot = deg_to_rad(into_wall.angle_to().m_y - cmd->m_viewangles.m_y);
+  g_prediction.restore_to_predicted();
+  local->set_abs_origin({wall.m_x + n.m_x * align, wall.m_y + n.m_y * align, z + 1.f});
+  local->get<vector>(velocity_offset) = {0.f, 0.f, -50.f};
+  local->calculate_abs_velocity();
+  local->flags() &= ~FL_ONGROUND;
+  local->get<c_base_handle>(ground_offset).m_index = 0xFFFFFFFF;
 
+  const vector into_wall(-n.m_x, -n.m_y, 0.f);
+  const float  rot  = deg_to_rad(into_wall.angle_to().m_y - cmd->m_viewangles.m_y);
+  cmd->buttons_     = duck ? IN_DUCK : 0;
+  cmd->forwardmove_ = cosf(rot) * 10.f;
+  cmd->sidemove_    = -sinf(rot) * 10.f;
+
+  int streak = 0;
+  for (int t = 0; t < 12; t++) {
+    g_prediction.simulate(cmd);
+    if (on_ground() || local->m_vec_origin().m_z < z - 2.f)
+      return false; // real floor / fell past it
+    streak = is_surf_velocity(local->m_velocity().m_z) ? streak + 1 : 0;
+    if (streak >= 3)
+      return true;
+  }
+  return false;
+}
+
+void c_pixelsurf::finder_solve(usercmd_t* cmd, float min_z, float max_z) {
+  m_found.clear();
   const int   backup_buttons = cmd->buttons_;
   const float backup_forward = cmd->forwardmove_, backup_side = cmd->sidemove_;
+  const vector& n = m_finder_normal;
 
-  const auto velocity_offset = g_netvars.m_offsets.dt_base_player.m_velocity;
-  const auto ground_offset   = g_netvars.m_offsets.dt_base_player.m_ground_handle;
-
-  for (int dz = -range; dz <= range; dz++) {
-    // ground snaps the origin to brush height + DIST_EPSILON, so that's where feet end up.
-    const float z = base_z + dz + 0.03125f;
-
+  // ground snaps the origin to brush height + DIST_EPSILON, so that's where feet end up.
+  for (float base = floorf(max_z); base >= floorf(min_z) - 1.f; base -= 1.f) {
+    const float z = base + 0.03125f;
     for (int duck = 0; duck < 2; duck++) {
-      g_prediction.restore_to_predicted();
-
-      // drop a copy of ourselves just above the candidate height, pressed into the wall.
-      local->set_abs_origin({m_calc_point.m_x + n.m_x * align, m_calc_point.m_y + n.m_y * align, z + 1.f});
-      local->get<vector>(velocity_offset) = {0.f, 0.f, -50.f};
-      local->calculate_abs_velocity();
-      local->flags() &= ~FL_ONGROUND;
-      local->get<c_base_handle>(ground_offset).m_index = 0xFFFFFFFF;
-
-      cmd->buttons_     = (backup_buttons & ~(IN_JUMP | IN_DUCK)) | (duck ? IN_DUCK : 0);
-      cmd->forwardmove_ = cosf(rot) * 10.f;
-      cmd->sidemove_    = -sinf(rot) * 10.f;
-
-      int streak = 0;
-      for (int t = 0; t < 12; t++) {
-        g_prediction.simulate(cmd);
-        if (on_ground())
-          break; // real floor, not a pixel
-        if (local->m_vec_origin().m_z < z - 2.f)
-          break; // fell past it
-        streak = is_surf_velocity(local->m_velocity().m_z) ? streak + 1 : 0;
-        if (streak >= 3) {
-          m_calc_results.push_back({{m_calc_point.m_x + n.m_x * 1.5f, m_calc_point.m_y + n.m_y * 1.5f, z}, duck != 0});
-          break;
-        }
-      }
+      if (!test_height(cmd, m_finder_start, n, z, duck != 0))
+        continue;
+      // a standing surf also surfs ducked, don't list it twice.
+      if (duck && !m_found.empty() && m_found.back().pos.m_z == z)
+        break;
+      m_found.push_back({{m_finder_start.m_x + n.m_x * 1.5f, m_finder_start.m_y + n.m_y * 1.5f, z}, n, duck != 0, ""});
     }
   }
 
@@ -257,6 +287,169 @@ void c_pixelsurf::calculator_solve(usercmd_t* cmd) {
   g_prediction.restore_to_predicted();
 }
 
+// aim at a marker and press: unsaved -> saved for this map, saved -> removed.
+void c_pixelsurf::save_key(usercmd_t* cmd) {
+  const auto& ctrl    = g_ui.m_controls.pixelsurf;
+  const bool  down    = ctrl.save_key->value_->enabled;
+  const bool  pressed = down && !m_save_key_down;
+  m_save_key_down     = down;
+  if (!pressed)
+    return;
+
+  int w, h;
+  g_interfaces.m_engine->get_screen_size(w, h);
+  const vector_2d centre(w * 0.5f, h * 0.5f);
+
+  const std::string map = current_map();
+  float best_dist = 30.f;
+  int   best_found = -1, best_saved = -1;
+
+  vector screen;
+  for (int i = 0; i < static_cast<int>(m_found.size()); i++) {
+    if (!math::world_to_screen(m_found[i].pos, screen))
+      continue;
+    const float d = hypotf(screen.m_x - centre.m_x, screen.m_y - centre.m_y);
+    if (d < best_dist) best_dist = d, best_found = i, best_saved = -1;
+  }
+  for (int i = 0; i < static_cast<int>(m_saved.size()); i++) {
+    if (m_saved[i].map != map || !math::world_to_screen(m_saved[i].pos, screen))
+      continue;
+    const float d = hypotf(screen.m_x - centre.m_x, screen.m_y - centre.m_y);
+    if (d < best_dist) best_dist = d, best_saved = i, best_found = -1;
+  }
+
+  if (best_saved >= 0) {
+    m_saved.erase(m_saved.begin() + best_saved);
+    save_points();
+    g_cl.chat_print("\x07" "61BA3B" "haven \x07" "FFFFFF" "| pixel surf point removed");
+  } else if (best_found >= 0) {
+    auto point = m_found[best_found];
+    point.map  = map;
+    m_saved.push_back(point);
+    m_found.erase(m_found.begin() + best_found);
+    save_points();
+    char msg[96];
+    snprintf(msg, sizeof(msg), "\x07" "61BA3B" "haven \x07" "FFFFFF" "| pixel surf point saved (z %.2f)", point.pos.m_z);
+    g_cl.chat_print(msg);
+  }
+}
+
+void c_pixelsurf::load_points() {
+  m_points_loaded = true;
+  m_saved.clear();
+  try {
+    std::ifstream stream(k_points_file);
+    if (!stream.good())
+      return;
+    nlohmann::json json;
+    stream >> json;
+    for (auto& [map, points] : json.items())
+      for (auto& p : points)
+        m_saved.push_back({{p.value("x", 0.f), p.value("y", 0.f), p.value("z", 0.f)},
+                           {p.value("nx", 0.f), p.value("ny", 0.f), p.value("nz", 0.f)},
+                           p.value("duck", false),
+                           map});
+  } catch (std::exception& e) {
+    printf_s(__FUNCTION__ " %s\n", e.what());
+  }
+}
+
+void c_pixelsurf::save_points() const {
+  try {
+    nlohmann::json json = nlohmann::json::object();
+    for (const auto& p : m_saved)
+      json[p.map].push_back({{"x", p.pos.m_x}, {"y", p.pos.m_y}, {"z", p.pos.m_z},
+                             {"nx", p.normal.m_x}, {"ny", p.normal.m_y}, {"nz", p.normal.m_z},
+                             {"duck", p.duck}});
+    std::ofstream stream(k_points_file);
+    stream << std::setw(2) << json << std::endl;
+  } catch (std::exception& e) {
+    printf_s(__FUNCTION__ " %s\n", e.what());
+  }
+}
+
+// simulate the jump types from the ground we're standing on and keep the feet height per tick,
+// so points can be labelled with what gets you there. refreshed when the ground height changes.
+void c_pixelsurf::update_arcs(usercmd_t* cmd, int tick_count) {
+  const auto local = g_cl.m_local;
+  if (!on_ground())
+    return;
+  const float ground_z = local->m_vec_origin().m_z;
+  if (fabsf(ground_z - m_arc_ground_z) < 0.5f && tick_count < m_arc_next_tick && !m_arcs.empty())
+    return;
+  m_arc_ground_z  = ground_z;
+  m_arc_next_tick = tick_count + 66;
+  m_arcs.clear();
+
+  usercmd_t sim        = *cmd;
+  sim.forwardmove_     = sim.sidemove_ = sim.upmove_ = 0.f;
+
+  // jump: release everything for a tick so the jump press registers, then jump once.
+  {
+    jump_arc_t arc{"jump", {}};
+    g_prediction.restore_to_predicted();
+    sim.buttons_ = 0;
+    g_prediction.simulate(&sim);
+    sim.buttons_ = IN_JUMP;
+    g_prediction.simulate(&sim);
+    sim.buttons_ = 0;
+    for (int t = 0; t < 128 && !on_ground(); t++) {
+      arc.rel_z.push_back(local->m_vec_origin().m_z - ground_z);
+      g_prediction.simulate(&sim);
+    }
+    if (!arc.rel_z.empty())
+      m_arcs.push_back(std::move(arc));
+  }
+
+  // drop: walking off the edge, plain gravity.
+  {
+    static auto sv_gravity = g_interfaces.m_cvar->find_var("sv_gravity");
+    const float gravity    = sv_gravity ? sv_gravity->m_value.m_float_value : 800.f;
+    const float dt         = g_interfaces.m_global_vars->m_interval_per_tick;
+    jump_arc_t  arc{"drop", {}};
+    float       v = 0.f, z = 0.f;
+    for (int t = 0; t < 128; t++) {
+      v -= gravity * dt * 0.5f;
+      z += v * dt;
+      v -= gravity * dt * 0.5f;
+      arc.rel_z.push_back(z);
+    }
+    m_arcs.push_back(std::move(arc));
+  }
+
+  g_prediction.restore_to_predicted();
+}
+
+// same tolerance as the source calculators: feet within a couple hundredths below the pixel.
+static bool height_matches(float feet, float target) {
+  const float d = target - feet;
+  return d > -0.01f && d < 0.03f;
+}
+
+std::string c_pixelsurf::reach_label(const calc_point_t& point) const {
+  if (m_arcs.empty() || m_arc_ground_z == FLT_MAX)
+    return {};
+  std::string label;
+  const auto add = [&](const char* name) {
+    if (!label.empty())
+      label += ", ";
+    label += name;
+  };
+  for (const auto& arc : m_arcs) {
+    bool plain = false, crouch = false;
+    for (const float rel : arc.rel_z) {
+      const float feet = m_arc_ground_z + rel;
+      plain |= height_matches(feet, point.pos.m_z);
+      crouch |= height_matches(feet + k_air_duck_shift, point.pos.m_z);
+    }
+    if (plain)
+      add(arc.name);
+    if (crouch)
+      add((std::string(arc.name) + " + crouch").c_str());
+  }
+  return label;
+}
+
 void c_pixelsurf::run(usercmd_t* cmd) {
   const auto& ctrl  = g_ui.m_controls.pixelsurf;
   const auto  local = g_cl.m_local;
@@ -264,14 +457,16 @@ void c_pixelsurf::run(usercmd_t* cmd) {
 
   const bool surf_on = ctrl.enabled->m_value && ctrl.key->value_->enabled;
   if (!surf_on && !ctrl.calc->m_value) {
-    m_should_surf = m_wall_detected = false;
+    m_should_surf = m_wall_detected = m_finder_held = false;
     return;
   }
   if (!local || !local->is_alive() || local->move_type() != MOVETYPE_WALK ||
       g_local_move.edgebug_active()) {
-    m_should_surf = m_wall_detected = false;
+    m_should_surf = m_wall_detected = m_finder_held = false;
     return;
   }
+  if (!m_points_loaded)
+    load_points();
 
   const int tick_count = g_interfaces.m_global_vars->m_tick_count;
   sim_globals_t globals;
@@ -287,7 +482,13 @@ void c_pixelsurf::run(usercmd_t* cmd) {
   } else
     m_should_surf = m_wall_detected = false;
 
-  calculator(cmd);
+  if (ctrl.calc->m_value) {
+    finder(cmd);
+    save_key(cmd);
+    update_arcs(cmd, tick_count);
+  } else
+    m_finder_held = false;
+
   g_prediction.restore_to_predicted();
 }
 
@@ -303,19 +504,39 @@ void c_pixelsurf::draw() {
                   g_ui.m_theme, e_text_alignment::text_align_center);
   }
 
-  if (!ctrl.calc->m_value || !m_calc_valid)
+  if (!ctrl.calc->m_value)
     return;
 
-  vector screen;
-  if (math::world_to_screen(m_calc_point, screen))
-    g_render.outlined_rect({screen.m_x - 3.f, screen.m_y - 3.f}, {6.f, 6.f}, {255, 255, 255});
+  vector screen, screen2;
 
-  for (const auto& point : m_calc_results) {
-    if (!math::world_to_screen(point.pos, screen))
-      continue;
-    const color col = point.duck ? color(255, 200, 40) : g_ui.m_theme;
-    g_render.filled_rect({screen.m_x - 2.f, screen.m_y - 2.f}, {5.f, 5.f}, col);
-    g_render.text(g_render.m_fonts.esp.flags, {screen.m_x + 6.f, screen.m_y - 5.f},
-                  point.duck ? "ps duck" : "ps", col);
+  // the line being dragged along the wall.
+  if (m_finder_held && m_finder_valid && math::world_to_screen(m_finder_start, screen) &&
+      math::world_to_screen(m_finder_end, screen2)) {
+    g_render.line({screen.m_x, screen.m_y}, {screen2.m_x, screen2.m_y}, {255, 255, 255});
+    g_render.filled_rect({screen.m_x - 2.f, screen.m_y - 2.f}, {5.f, 5.f}, {255, 255, 255});
+    g_render.filled_rect({screen2.m_x - 2.f, screen2.m_y - 2.f}, {5.f, 5.f}, {255, 255, 255});
   }
+
+  const std::string map = current_map();
+  const auto draw_point = [&](const calc_point_t& point, bool saved) {
+    if (!math::world_to_screen(point.pos, screen))
+      return;
+    const color col = point.duck ? color(255, 200, 40) : g_ui.m_theme;
+    if (saved) {
+      g_render.filled_rect({screen.m_x - 3.f, screen.m_y - 3.f}, {7.f, 7.f}, col);
+      g_render.outlined_rect({screen.m_x - 4.f, screen.m_y - 4.f}, {9.f, 9.f}, {0, 0, 0});
+    } else
+      g_render.outlined_rect({screen.m_x - 3.f, screen.m_y - 3.f}, {7.f, 7.f}, col);
+
+    std::string label = point.duck ? "ps duck" : "ps";
+    if (const auto reach = reach_label(point); !reach.empty())
+      label += " [" + reach + "]";
+    g_render.text(g_render.m_fonts.esp.flags, {screen.m_x + 8.f, screen.m_y - 5.f}, label.c_str(), col);
+  };
+
+  for (const auto& point : m_saved)
+    if (point.map == map)
+      draw_point(point, true);
+  for (const auto& point : m_found)
+    draw_point(point, false);
 }
