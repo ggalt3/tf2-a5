@@ -18,7 +18,8 @@ static void clamp_angles(vector& ang) {
 // ---------------------------------------------------------------------------
 
 void c_movement::edgebug_reset() {
-  m_eb_detected     = false;
+  m_eb_detected      = false;
+  m_eb_view_override = false;
   m_eb_lock_ticks   = 0;
   m_eb_current_tick = 0;
   m_eb_search_mode  = 0;
@@ -220,7 +221,8 @@ void c_movement::edgebug_post() {
   angle_delta *= 0.5f;
   last_angles = backup_angles;
 
-  const bool stack = ctrl.edgebug_stack->m_value;
+  const bool stack   = ctrl.edgebug_stack->m_value;
+  m_eb_view_override = false;
 
   // replay finished last frame -> bookkeeping, then fall through into a fresh search so a
   // chained edgebug can be picked up on this very command.
@@ -397,6 +399,7 @@ void c_movement::edgebug_post() {
           m_eb_current_tick = 1;        // replaying cmd 0 on this command
           m_eb_search_mode  = mode.type;
           m_eb_duck         = duck;
+          m_eb_target_origin = local->m_vec_origin();
           last_success      = mode;
           has_last_success  = true;
           break;
@@ -432,19 +435,25 @@ void c_movement::edgebug_post() {
       cmd->sidemove_    = stored.sidemove;
 
       vector view = backup_angles;
-      if (!ctrl.edgebug_silent->m_value && m_eb_search_mode != eb_still) {
-        // guide the view towards where we're actually heading: the predicted angles for the
-        // mouse-continuation mode, the velocity direction for the strafing modes.
-        float target_yaw = stored.viewangles.m_y;
-        if (m_eb_search_mode != eb_user) {
-          const vector velocity = local->m_velocity();
-          if (velocity.length_2d() > 1.f)
-            target_yaw = velocity.angle_to().m_y;
-        }
-        const float diff = std::remainderf(target_yaw - view.m_y, 360.f);
-        view.m_y += std::clamp(diff * 0.25f, -8.f, 8.f);
+      if (!ctrl.edgebug_silent->m_value) {
+        // ease the view onto the predicted edgebug spot. once we're nearly on top of it the
+        // direction gets unstable, so hold the yaw and just follow our velocity instead.
+        const vector eye   = local->m_vec_origin() + local->m_view_offset();
+        const vector delta = m_eb_target_origin - eye;
+        float        target_yaw = view.m_y, target_pitch = view.m_x;
+        if (delta.length_2d() > 24.f) {
+          const vector look = eye.look(m_eb_target_origin);
+          target_yaw   = look.m_y;
+          target_pitch = std::clamp(look.m_x, -15.f, 45.f);
+        } else if (local->m_velocity().length_2d() > 1.f)
+          target_yaw = local->m_velocity().angle_to().m_y;
+
+        const float yaw_diff   = std::remainderf(target_yaw - view.m_y, 360.f);
+        const float pitch_diff = target_pitch - view.m_x;
+        view.m_y += std::clamp(yaw_diff * 0.25f, -8.f, 8.f);
+        view.m_x += std::clamp(pitch_diff * 0.15f, -3.f, 3.f);
         clamp_angles(view);
-        view.m_x = backup_angles.m_x;
+        m_eb_view_override = true;
       }
 
       // re-express the stored movement relative to the angles we're actually sending.

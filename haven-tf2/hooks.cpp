@@ -66,6 +66,10 @@ bool create_move(void* idk, float sample, usercmd_t* cmd) {
   if (cmd->command_number_ != 0) {
     g_interfaces.m_engine->set_view_angles(cmd->m_viewangles);
     g_cl.on_move(cmd);
+    // we return false so the engine never picks up angle changes made in on_move; push them
+    // ourselves when a feature wants its angles to be visible.
+    if (g_local_move.m_eb_view_override)
+      g_interfaces.m_engine->set_view_angles(cmd->m_viewangles);
   }
   return false;
 }

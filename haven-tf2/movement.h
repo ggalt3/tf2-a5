@@ -21,6 +21,7 @@ class c_movement
     int           m_eb_search_mode     = 0;
     int           m_eb_stack_count     = 0;
     int           m_eb_stack_window    = 0;
+    vector        m_eb_target_origin   = {}; // predicted position of the edgebug
     edgebug_cmd_t m_eb_cmds[64]        = {};
 
     bool edgebug_check(usercmd_t* cmd);
@@ -41,6 +42,8 @@ public:
     void edgebug_mouse_lock(float& x, float& y);
 
     bool edgebug_active() const { return m_eb_detected; }
+    // set when edgebug_post changed cmd->m_viewangles and wants the engine view to follow.
+    bool m_eb_view_override = false;
 
     int m_switch = 1;
     float m_old_yaw = 0;
