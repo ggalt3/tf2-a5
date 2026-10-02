@@ -36,7 +36,7 @@ float c_pixelsurf::surf_velocity() const {
   return -(gravity * g_interfaces.m_global_vars->m_interval_per_tick * 0.5f);
 }
 
-bool c_pixelsurf::is_surf_velocity(float z) const { return fabsf(z - surf_velocity()) < 0.015f; }
+bool c_pixelsurf::is_surf_velocity(float z) const { return fabsf(z - surf_velocity()) < 0.1f; }
 
 static bool on_ground() { return g_cl.m_local->flags() & FL_ONGROUND; }
 
@@ -197,6 +197,7 @@ void c_pixelsurf::finder(usercmd_t* cmd) {
       if (m_finder_valid) {
         m_finder_start = m_finder_end = trace.m_end;
         m_finder_normal = trace.m_plane.normal;
+        m_finder_disp   = trace.m_surface.name && strstr(trace.m_surface.name, "disp");
         m_found.clear();
       }
     } else if (m_finder_valid && hit) {
@@ -230,36 +231,33 @@ void c_pixelsurf::finder(usercmd_t* cmd) {
   g_cl.chat_print(msg);
 }
 
-// drops a copy of us just above the candidate height pressed into the wall and asks the engine.
-bool c_pixelsurf::test_height(usercmd_t* cmd, const vector& wall, const vector& n, float z, bool duck) {
+// lobotomy's finder test: park the player airborne at exactly the scan height with the hull
+// flush against the wall, run a single tick pushing into it, and look for the surf velocity.
+//   mode 0: standing, still    mode 1: rising (head bounce)    mode 2: ducked
+bool c_pixelsurf::test_height(usercmd_t* cmd, const vector& wall, const vector& n, float z, int mode) {
   const auto  local = g_cl.m_local;
-  const float align = local->maxs().m_x - 0.02197f;
-  const auto  velocity_offset = g_netvars.m_offsets.dt_base_player.m_velocity;
-  const auto  ground_offset   = g_netvars.m_offsets.dt_base_player.m_ground_handle;
+  // hull edge a hair inside the wall plane, displacements need it a hair outside instead.
+  const float align = m_finder_disp ? local->maxs().m_x + 0.001f : local->maxs().m_x - 0.02197f;
+  const auto  ground_offset = g_netvars.m_offsets.dt_base_player.m_ground_handle;
 
   g_prediction.restore_to_predicted();
-  local->set_abs_origin({wall.m_x + n.m_x * align, wall.m_y + n.m_y * align, z + 1.f});
-  local->get<vector>(velocity_offset) = {0.f, 0.f, -50.f};
-  local->calculate_abs_velocity();
+
+  // SetupMove starts from the network origin, so that is what has to move. abs origin is set
+  // at the wall point the way the source does it.
+  local->m_vec_origin() = {wall.m_x + n.m_x * align, wall.m_y + n.m_y * align, z};
+  local->set_abs_origin({wall.m_x, wall.m_y, z});
+  local->set_abs_velocity({0.f, 0.f, mode == 1 ? -surf_velocity() * 3.f : 0.f});
   local->flags() &= ~FL_ONGROUND;
   local->get<c_base_handle>(ground_offset).m_index = 0xFFFFFFFF;
 
   const vector into_wall(-n.m_x, -n.m_y, 0.f);
   const float  rot  = deg_to_rad(into_wall.angle_to().m_y - cmd->m_viewangles.m_y);
-  cmd->buttons_     = duck ? IN_DUCK : 0;
-  cmd->forwardmove_ = cosf(rot) * 10.f;
-  cmd->sidemove_    = -sinf(rot) * 10.f;
+  cmd->buttons_     = mode == 2 ? IN_DUCK : 0;
+  cmd->forwardmove_ = cosf(rot) * 6.f;
+  cmd->sidemove_    = -sinf(rot) * 6.f;
 
-  int streak = 0;
-  for (int t = 0; t < 12; t++) {
-    g_prediction.simulate(cmd);
-    if (on_ground() || local->m_vec_origin().m_z < z - 2.f)
-      return false; // real floor / fell past it
-    streak = is_surf_velocity(local->m_velocity().m_z) ? streak + 1 : 0;
-    if (streak >= 3)
-      return true;
-  }
-  return false;
+  g_prediction.simulate(cmd);
+  return is_surf_velocity(local->m_velocity().m_z);
 }
 
 void c_pixelsurf::finder_solve(usercmd_t* cmd, float min_z, float max_z) {
@@ -267,18 +265,26 @@ void c_pixelsurf::finder_solve(usercmd_t* cmd, float min_z, float max_z) {
   const int   backup_buttons = cmd->buttons_;
   const float backup_forward = cmd->forwardmove_, backup_side = cmd->sidemove_;
   const vector& n = m_finder_normal;
+  const vector  wall(m_finder_start.m_x, m_finder_start.m_y, 0.f);
 
-  // ground snaps the origin to brush height + DIST_EPSILON, so that's where feet end up.
-  for (float base = floorf(max_z); base >= floorf(min_z) - 1.f; base -= 1.f) {
-    const float z = base + 0.03125f;
-    for (int duck = 0; duck < 2; duck++) {
-      if (!test_height(cmd, m_finder_start, n, z, duck != 0))
-        continue;
-      // a standing surf also surfs ducked, don't list it twice.
-      if (duck && !m_found.empty() && m_found.back().pos.m_z == z)
-        break;
-      m_found.push_back({{m_finder_start.m_x + n.m_x * 1.5f, m_finder_start.m_y + n.m_y * 1.5f, z}, n, duck != 0, ""});
-    }
+  // scan top to bottom in 1 unit steps, at the height ground snapping leaves feet on a pixel.
+  const float top = max_z;
+  for (float lerp = 0.f; lerp <= top - min_z; lerp += 1.f) {
+    const float z = top < 0.f ? static_cast<float>(static_cast<int>(top)) - 0.97125f - lerp
+                              : static_cast<float>(static_cast<int>(top)) + 0.03125f - lerp;
+
+    bool found = false, duck = false;
+    if (test_height(cmd, wall, n, z, 0) || test_height(cmd, wall, n, z, 1))
+      found = true;
+    else if (test_height(cmd, wall, n, z, 2))
+      found = duck = true;
+    if (!found)
+      continue;
+
+    // adjacent heights are the same pixel, keep the first (highest).
+    if (!m_found.empty() && fabsf(m_found.back().pos.m_z - z) < 1.5f)
+      continue;
+    m_found.push_back({{wall.m_x + n.m_x * 1.5f, wall.m_y + n.m_y * 1.5f, z}, n, duck, ""});
   }
 
   cmd->buttons_     = backup_buttons;

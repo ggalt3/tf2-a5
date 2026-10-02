@@ -298,6 +298,14 @@ void c_base_player::set_abs_origin(vector origin) {
           .as<oSetAbsOrigin>();
   func(this, origin);
 }
+void c_base_player::set_abs_velocity(vector velocity) {
+  typedef void (*oSetAbsVelocity)(void*, const vector&);
+  static auto func = g_modules.get("client.dll")
+                         .get_sig("48 89 5C 24 ? 57 48 83 EC ? F3 0F 10 81 ? ? ? ? 48 8B DA 0F 2E 02")
+                         .as<oSetAbsVelocity>();
+  if (func)
+    func(this, velocity);
+}
 void c_base_player::set_abs_angles(vector angles) {
   typedef void (*oSetAbsAngles)(void*, vector);
   static auto func =

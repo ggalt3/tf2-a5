@@ -27,6 +27,7 @@ class c_pixelsurf
     // finder: hold the key and drag a vertical line along a wall
     bool   m_finder_held   = false;
     bool   m_finder_valid  = false;
+    bool   m_finder_disp   = false;
     vector m_finder_start  = {};
     vector m_finder_end    = {};
     vector m_finder_normal = {};
@@ -52,7 +53,7 @@ class c_pixelsurf
 
     void finder(usercmd_t* cmd);
     void finder_solve(usercmd_t* cmd, float min_z, float max_z);
-    bool test_height(usercmd_t* cmd, const vector& wall, const vector& normal, float z, bool duck);
+    bool test_height(usercmd_t* cmd, const vector& wall, const vector& normal, float z, int mode);
 
     void save_key(usercmd_t* cmd);
     void load_points();
