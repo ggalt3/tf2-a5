@@ -1,0 +1,7 @@
+output/
+intermediates/
+.vs/
+*.user
+x64/
+Debug/
+Release/
