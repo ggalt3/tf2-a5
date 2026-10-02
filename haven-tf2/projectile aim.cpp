@@ -439,7 +439,8 @@ void proj_aim::select_target() {
       CSteamID tempID =
           CSteamID(info.m_friends_id, k_EUniversePublic, k_EAccountTypeIndividual);
 
-      if (g_interfaces.steam_friends->HasFriend(tempID, k_EFriendFlagImmediate))
+      if (g_interfaces.steam_friends &&
+          g_interfaces.steam_friends->HasFriend(tempID, k_EFriendFlagImmediate))
         continue;
     }
 

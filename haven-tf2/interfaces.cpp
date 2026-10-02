@@ -39,7 +39,8 @@ void c_interfaces::gather() {
   const auto steam = g_modules.get("steamclient64.dll");
   {
     steam_client = steam.get_interface("SteamClient020", true).as<ISteamClient>();
-
+  }
+  if (steam_client) {
     const HSteamPipe hsNewPipe = steam_client->CreateSteamPipe();
     const HSteamPipe hsNewUser = steam_client->ConnectToGlobalUser(hsNewPipe);
     steam_friends =

@@ -60,7 +60,14 @@ void c_modules::add(const char* name, bool populate_ifaces) {
   if (populate_ifaces) {
     // export CreateInterface calls CreateInterfaceInternal https://i-dont.go-outsi.de/5ptWtWhKH
     // this sig *should* be global.
-    mod.populate_interfaces(mod.get_sig("4C 8B 0D ?? ?? ?? ?? 4C 8B D2").rel32(0x3));
+    auto sig = mod.get_sig("4C 8B 0D ?? ?? ?? ?? 4C 8B D2");
+    if (sig.m_ptr)
+      mod.populate_interfaces(sig.rel32(0x3));
+    else {
+      // not fatal, get_interface falls back to the exported CreateInterface.
+      c_utils::debug_t::set_console_color(console_color_red);
+      printf_s("[!] interface reg sig not found (%s), using CreateInterface export\n", name);
+    }
   }
 
   this->modules_.emplace_back(mod);
@@ -132,6 +139,14 @@ interface_t module_t::get_interface_exact(const char* name) const {
 
     // found.
     return iface;
+  }
+
+  // fall back to the module's exported CreateInterface.
+  using create_interface_fn = void* (*)(const char*, int*);
+  if (const auto create_interface = reinterpret_cast<create_interface_fn>(
+          GetProcAddress(this->m_module, "CreateInterface"))) {
+    if (const auto ptr = create_interface(name, nullptr))
+      return {name, hashed_name, static_cast<uintptr_t*>(ptr)};
   }
 
   c_utils::debug_t::set_console_color(console_color_red);
