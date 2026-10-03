@@ -25,9 +25,11 @@ class c_pixelsurf
     bool m_in_surf     = false;
 
     // auto jump
-    int m_auto_duck_until    = 0;
-    int m_auto_jump_cooldown = 0;
-    int m_pending_variant    = -1; // verified jump variant waiting for a release-then-press edge
+    int   m_auto_duck_until    = 0;
+    int   m_auto_push_until    = 0;
+    int   m_auto_jump_cooldown = 0;
+    float m_push_yaw           = 0.f; // world yaw into the wall of the point we jumped at
+    int   m_pending_variant    = -1;  // jump waiting a tick for a held IN_JUMP to release
 
     // finder: hold the key and drag a vertical line along a wall
     bool   m_finder_held   = false;

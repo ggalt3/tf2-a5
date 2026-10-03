@@ -158,12 +158,23 @@ void c_pixelsurf::pixel_surf(usercmd_t* cmd, const vector& velocity, int tick_co
   }
 }
 
-// on the ground near a saved point: check whether jumping (plain or with an air crouch) lands
-// us on the pixel, and jump when it does. drops need no input, the airborne logic handles them.
+// on the ground near a saved point: jump toward its wall like the reference does. duck-typed
+// points get a duck held through takeoff (ctap/lj style). while airborne after the jump we keep
+// pressing into the wall so the drift actually reaches it.
 void c_pixelsurf::auto_jump(usercmd_t* cmd, int tick_count) {
   const auto& ctrl  = g_ui.m_controls.pixelsurf;
   const auto  local = g_cl.m_local;
-  if (!ctrl.auto_jump->m_value || !on_ground()) {
+
+  if (!on_ground()) {
+    m_pending_variant = -1;
+    if (ctrl.auto_jump->m_value && tick_count < m_auto_push_until) {
+      const float rot = deg_to_rad(m_push_yaw - cmd->m_viewangles.m_y);
+      cmd->forwardmove_ = cosf(rot) * 450.f;
+      cmd->sidemove_    = -sinf(rot) * 450.f;
+    }
+    return;
+  }
+  if (!ctrl.auto_jump->m_value) {
     m_pending_variant = -1;
     return;
   }
@@ -192,70 +203,34 @@ void c_pixelsurf::auto_jump(usercmd_t* cmd, int tick_count) {
   const float  rot = deg_to_rad(into_wall.angle_to().m_y - cmd->m_viewangles.m_y);
   const float  push_forward = cosf(rot) * 450.f, push_side = -sinf(rot) * 450.f;
 
-  // last tick we released a held jump so this press registers as a fresh edge.
-  if (m_pending_variant >= 0) {
+  const auto fire = [&] {
     cmd->buttons_ |= IN_JUMP;
-    cmd->buttons_ &= ~IN_DUCK;
-    cmd->forwardmove_ = push_forward;
-    cmd->sidemove_    = push_side;
-    m_auto_duck_until    = m_pending_variant == 1 ? tick_count + 48 : 0;
-    m_auto_jump_cooldown = tick_count + 10;
-    m_pending_variant    = -1;
-    return;
-  }
-
-  const int   backup_buttons = cmd->buttons_;
-  const float backup_forward = cmd->forwardmove_, backup_side = cmd->sidemove_;
-
-  int chosen = -1; // 0 = jump, 1 = jump + air crouch
-  for (int variant = 0; variant < 2 && chosen < 0; variant++) {
-    g_prediction.restore_to_predicted();
-    cmd->forwardmove_ = push_forward;
-    cmd->sidemove_    = push_side;
-
-    // jump needs a release tick to register if the player is holding it.
-    cmd->buttons_ = backup_buttons & ~(IN_JUMP | IN_DUCK);
-    if (backup_buttons & IN_JUMP)
-      g_prediction.simulate(cmd);
-    cmd->buttons_ |= IN_JUMP;
-    g_prediction.simulate(cmd);
-    cmd->buttons_ &= ~IN_JUMP;
-    if (variant == 1)
+    if (target->duck)
       cmd->buttons_ |= IN_DUCK;
-
-    for (int t = 0; t < 96; t++) {
-      g_prediction.simulate(cmd);
-      if (on_ground())
-        break;
-      const vector pos = local->m_vec_origin();
-      if (is_surf_velocity(local->m_velocity().m_z) && fabsf(pos.m_z - target->pos.m_z) < 2.5f &&
-          (pos - target->pos).length_2d() < 40.f) {
-        chosen = variant;
-        break;
-      }
-    }
-  }
-
-  cmd->buttons_     = backup_buttons;
-  cmd->forwardmove_ = backup_forward;
-  cmd->sidemove_    = backup_side;
-  g_prediction.restore_to_predicted();
-
-  if (chosen < 0)
-    return;
+    else
+      cmd->buttons_ &= ~IN_DUCK;
+    cmd->forwardmove_ = push_forward;
+    cmd->sidemove_    = push_side;
+    m_push_yaw            = into_wall.angle_to().m_y;
+    m_auto_duck_until     = target->duck ? tick_count + 48 : 0;
+    m_auto_push_until     = tick_count + 48;
+    m_auto_jump_cooldown  = tick_count + 10;
+    m_pending_variant     = -1;
+    g_cl.chat_print(target->duck ? "\x07" "61BA3B" "haven \x07" "FFFFFF" "| pixel surf: auto jump (duck)"
+                                 : "\x07" "61BA3B" "haven \x07" "FFFFFF" "| pixel surf: auto jump");
+  };
 
   // a held jump is ignored by the engine: release it this tick, press it next tick.
-  if (backup_buttons & IN_JUMP) {
-    cmd->buttons_ &= ~IN_JUMP;
-    m_pending_variant = chosen;
+  if (m_pending_variant >= 0) {
+    fire();
     return;
   }
-  cmd->buttons_ |= IN_JUMP;
-  cmd->buttons_ &= ~IN_DUCK;
-  cmd->forwardmove_ = push_forward;
-  cmd->sidemove_    = push_side;
-  m_auto_duck_until    = chosen == 1 ? tick_count + 48 : 0;
-  m_auto_jump_cooldown = tick_count + 10;
+  if (cmd->buttons_ & IN_JUMP) {
+    cmd->buttons_ &= ~IN_JUMP;
+    m_pending_variant = target->duck ? 1 : 0;
+    return;
+  }
+  fire();
 }
 
 // ---------------------------------------------------------------------------
